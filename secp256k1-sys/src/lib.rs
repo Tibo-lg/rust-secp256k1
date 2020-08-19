@@ -90,6 +90,19 @@ pub type SchnorrNonceFn = Option<unsafe extern "C" fn(
     data: *mut c_void,
 ) -> c_int>;
 
+pub extern "C" fn constant_nonce_fn(
+    nonce32: *mut c_uchar,
+    _msg32: *const c_uchar, 
+    _key32: *const c_uchar, 
+    _xonly_pk32: *const c_uchar, 
+    _algo16: *const c_uchar, 
+    data: *mut c_void) -> c_int {
+    unsafe {
+        ptr::copy_nonoverlapping(data as *const c_uchar, nonce32, 32);
+    }
+    return 1;
+}
+
 /// A Secp256k1 context, containing various precomputed values and such
 /// needed to do elliptic curve computations. If you create one of these
 /// with `secp256k1_context_create` you MUST destroy it with
@@ -478,6 +491,44 @@ extern "C" {
         internal_pubkey: *const XOnlyPublicKey,
         tweak32: *const c_uchar,
     ) -> c_int;
+
+    // ECDSA Adaptor
+    #[cfg_attr(not(feature = "external-symbols"), link_name = "rustsecp256k1_v0_4_0_adaptor_0_ecdsa_adaptor_sign")]
+    pub fn secp256k1_ecdsa_adaptor_sign(
+        cx: *const Context,
+        adaptor_sig: *mut c_uchar,
+        adaptor_proof: *mut c_uchar,
+        seckey: *const c_uchar,
+        adaptor: *const PublicKey,
+        msg32: *const c_uchar
+    ) -> c_int;
+
+    #[cfg_attr(not(feature = "external-symbols"), link_name = "rustsecp256k1_v0_4_0_adaptor_0_ecdsa_adaptor_sig_verify")]
+    pub fn secp256k1_ecdsa_adaptor_sig_verify(
+        cx: *const Context,
+        adaptor_sig: *const c_uchar,
+        pubkey: *const PublicKey,
+        msg32: *const c_uchar,
+        adaptor: *const PublicKey,
+        adaptor_proof: *const c_uchar,
+    ) -> c_int;
+
+    #[cfg_attr(not(feature = "external-symbols"), link_name = "rustsecp256k1_v0_4_0_adaptor_0_ecdsa_adaptor_adapt")]
+    pub fn secp256k1_ecdsa_adaptor_adapt(
+        cx: *const Context,
+        sig: *mut Signature,
+        adaptor_secret: *const c_uchar,
+        adaptor_sig: *const c_uchar,
+    ) -> c_int;
+
+    #[cfg_attr(not(feature = "external-symbols"), link_name = "rustsecp256k1_v0_4_0_adaptor_0_ecdsa_adaptor_extract_secret")]
+    pub fn secp256k1_ecdsa_adaptor_extract_secret(
+        cx: *const Context,
+        adaptor_secret: *mut c_uchar,
+        sig: *const Signature,
+        adaptor_sig: *const c_uchar,
+        adaptor: *const PublicKey,
+    ) -> c_int;
 }
 
 #[cfg(not(fuzzing))]
@@ -515,6 +566,15 @@ extern "C" {
         cx: *const Context,
         sig64: *const c_uchar,
         msg32: *const c_uchar,
+        pubkey: *const XOnlyPublicKey,
+    ) -> c_int;
+
+    #[cfg_attr(not(rust_secp_no_symbol_renaming), link_name = "rustsecp256k1_v0_4_0_adaptor_0_schnorrsig_compute_sigpoint")]
+    pub fn secp256k1_schnorrsig_compute_sigpoint(
+        cx: *const Context,
+        sigpoint: *mut PublicKey,
+        msg32: *const c_uchar,
+        nonce: *const XOnlyPublicKey,
         pubkey: *const XOnlyPublicKey,
     ) -> c_int;
 }
@@ -753,6 +813,58 @@ mod fuzz_dummy {
         sig_sl[32..].copy_from_slice(&new_kp.0[32..64]);
         1
     }
+
+
+    pub unsafe fn secp256k1_schnorrsig_compute_sigpoint(
+        cx: *const Context,
+        sigpoint: *mut PublicKey,
+        msg32: *const c_uchar,
+        nonce: *const XOnlyPublicKey,
+        pubkey: *const XOnlyPublicKey,
+    ) -> c_int {
+        unimplemented!();
+    }
+
+    pub unsafe fn secp256k1_ecdsa_adaptor_sign(
+        cx: *const Context,
+        adaptor_sig: *mut c_uchar,
+        adaptor_proof: *mut c_uchar,
+        seckey: *const c_uchar,
+        adaptor: *const PublicKey,
+        msg32: *const c_uchar
+    ) -> c_int {
+        unimplemented!();
+    }
+
+    pub unsafe fn secp256k1_ecdsa_adaptor_sig_verify(
+        cx: *const Context,
+        adaptor_sig: *const c_uchar,
+        pubkey: *const PublicKey,
+        msg32: *const c_uchar,
+        adaptor: *const PublicKey,
+        adaptor_proof: *const c_uchar,
+    ) -> c_int {
+        unimplemented!();
+    }
+
+    pub unsafe fn secp256k1_ecdsa_adaptor_adapt(
+        cx: *const Context,
+        sig: *mut Signature,
+        adaptor_secret: *const c_uchar,
+        adaptor_sig: *const c_uchar,
+    ) -> c_int {
+        unimplemented!();
+    }
+
+    pub unsafe fn secp256k1_ecdsa_adaptor_extract_secret(
+        cx: *const Context,
+        adaptor_secret: *mut c_uchar,
+        sig: *const Signature,
+        adaptor_sig: *const c_uchar,
+        adaptor: *const PublicKey,
+    ) -> c_int {
+        unimplemented!();
+    }
 }
 
 #[cfg(fuzzing)]
@@ -771,5 +883,6 @@ mod tests {
 
         assert_eq!(orig.len(), unsafe {strlen(test.as_ptr())});
     }
+
 }
 
