@@ -98,6 +98,11 @@ impl Signature {
             _ => Err(InvalidSignature),
         }
     }
+
+    /// Decompose a bip340 signature into a nonce and a secret key (as byte array)
+    pub fn decompose(&self) -> Result<(PublicKey, &[u8]), Error> {
+        Ok((PublicKey::from_slice(&self.0[0..32])?, &self.0[32..64]))
+    }
 }
 
 impl KeyPair {
@@ -386,6 +391,23 @@ impl<C: Signing> Secp256k1<C> {
         nonce_data: *const ffi::types::c_void,
     ) -> Signature {
         unsafe {
+            self.schnorrsig_sign_helper_with_nonce_fn(
+                msg,
+                keypair,
+                nonce_data,
+                ffi::secp256k1_nonce_function_bip340,
+            )
+        }
+    }
+
+    fn schnorrsig_sign_helper_with_nonce_fn(
+        &self,
+        msg: &Message,
+        keypair: &KeyPair,
+        nonce_data: *const ffi::types::c_void,
+        nonce_fn: ffi::SchnorrNonceFn,
+    ) -> Signature {
+        unsafe {
             let mut sig = [0u8; constants::SCHNORRSIG_SIGNATURE_SIZE];
             assert_eq!(
                 1,
@@ -394,7 +416,7 @@ impl<C: Signing> Secp256k1<C> {
                     sig.as_mut_c_ptr(),
                     msg.as_c_ptr(),
                     keypair.as_ptr(),
-                    ffi::secp256k1_nonce_function_bip340,
+                    nonce_fn,
                     nonce_data
                 )
             );
@@ -448,6 +470,47 @@ impl<C: Signing> Secp256k1<C> {
         let mut aux = [0u8; 32];
         rng.fill_bytes(&mut aux);
         self.schnorrsig_sign_helper(msg, keypair, aux.as_c_ptr() as *const ffi::types::c_void)
+    }
+
+    /// Create a bip340 signature using the provided nonce.
+    pub fn schnorrsig_sign_with_nonce(
+        &self,
+        msg: &Message,
+        keypair: &KeyPair,
+        nonce: &[u8; 32],
+    ) -> Signature {
+        self.schnorrsig_sign_helper_with_nonce_fn(
+            msg,
+            keypair,
+            nonce.as_c_ptr() as *const ffi::types::c_void,
+            Some(ffi::constant_nonce_fn),
+        )
+    }
+
+    /// Computes a signature point based on a nonce, a message and a public key.
+    pub fn schnorrsig_compute_sig_point(
+        &self,
+        msg: &Message,
+        nonce: &PublicKey,
+        pubkey: &PublicKey,
+    ) -> Result<::key::PublicKey, Error> {
+        unsafe {
+            let mut sigpoint = ffi::PublicKey::new();
+
+            let ret = ffi::secp256k1_schnorrsig_compute_sigpoint(
+                self.ctx,
+                &mut sigpoint,
+                msg.as_c_ptr(),
+                nonce.as_c_ptr(),
+                pubkey.as_c_ptr(),
+            );
+
+            if ret == 0 {
+                return Err(Error::InvalidPublicKey);
+            }
+
+            Ok(::key::PublicKey::from(sigpoint))
+        }
     }
 
     /// Verify a Schnorr signature.

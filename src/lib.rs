@@ -143,6 +143,7 @@ mod macros;
 mod context;
 pub mod constants;
 pub mod ecdh;
+pub mod ecdsa_adaptor;
 pub mod key;
 pub mod schnorrsig;
 #[cfg(feature = "recovery")]
@@ -528,6 +529,10 @@ pub enum Error {
     TweakCheckFailed,
     /// Didn't pass enough memory to context creation with preallocated memory
     NotEnoughMemory,
+    /// Bad adaptor signature
+    InvalidAdaptorSignature,
+    /// Bad adaptor proof
+    InvalidAdaptorProof,
 }
 
 impl Error {
@@ -542,6 +547,8 @@ impl Error {
             Error::InvalidTweak => "secp: bad tweak",
             Error::TweakCheckFailed => "secp: xonly_pubkey_tewak_add_check failed",
             Error::NotEnoughMemory => "secp: not enough memory allocated",
+            Error::InvalidAdaptorSignature => "secp: malformed adaptor signature",
+            Error::InvalidAdaptorProof => "secp: malformed adaptor proof",
         }
     }
 }
