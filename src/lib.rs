@@ -169,6 +169,7 @@ mod context;
 pub mod constants;
 pub mod ecdh;
 pub mod key;
+pub mod schnorrsig;
 #[cfg(feature = "recovery")]
 pub mod recovery;
 
@@ -550,6 +551,12 @@ pub enum Error {
     InvalidTweak,
     /// Didn't pass enough memory to context creation with preallocated memory
     NotEnoughMemory,
+    /// Bad Schnorr signature
+    InvalidSchnorrSignature,
+    /// Bad x-only public key
+    InvalidXOnlyPublicKey,
+    /// Bad key pair
+    InvalidKeyPair,
 }
 
 impl Error {
@@ -563,6 +570,9 @@ impl Error {
             Error::InvalidRecoveryId => "secp: bad recovery id",
             Error::InvalidTweak => "secp: bad tweak",
             Error::NotEnoughMemory => "secp: not enough memory allocated",
+            Error::InvalidSchnorrSignature => "secp: malformed Schnorr signature",
+            Error::InvalidXOnlyPublicKey => "secp: malformed x-only public key",
+            Error::InvalidKeyPair => "secp: malformed key pair",
         }
     }
 }
