@@ -57,3 +57,7 @@ required-features = ["rand"]
 [workspace]
 members = ["secp256k1-sys"]
 exclude = ["no_std_test"]
+
+[[example]]
+name = "ecdsa_adaptor"
+required-features = ["rand", "bitcoin_hashes"]
