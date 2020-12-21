@@ -678,6 +678,48 @@ impl<C: Signing> Secp256k1<C> {
         }
     }
 
+    /// Constructs a signature for `msg` using the secret key `sk`, RFC6979 nonce
+    /// and "grinds" the nonce by passing extra entropy if necessary to produce
+    /// a signature that is 72 - bytes_to_grind bytes.
+    /// Requires a signing capable context.
+    pub fn sign_low_r(&self, msg: &Message, sk: &key::SecretKey, bytes_to_grind: usize) -> Signature {
+        let mut entropy_p : *const ffi::types::c_void = ptr::null();
+        let mut counter : u32 = 0;
+        let mut extra_entropy = [0u8; 32];
+        loop {
+            unsafe {
+                let mut ret = ffi::Signature::new();
+                // We can assume the return value because it's not possible to construct
+                // an invalid signature from a valid `Message` and `SecretKey`
+                assert_eq!(ffi::secp256k1_ecdsa_sign(self.ctx, &mut ret, msg.as_c_ptr(),
+                                                    sk.as_c_ptr(), ffi::secp256k1_nonce_function_rfc6979,
+                                                    entropy_p), 1);
+                let mut ser_ret = [0; 72];
+                let mut len: usize = ser_ret.len();
+                let err = ffi::secp256k1_ecdsa_signature_serialize_der(
+                    ffi::secp256k1_context_no_precomp,
+                    ser_ret.as_mut_c_ptr(),
+                    &mut len,
+                    &ret,
+                );
+                debug_assert!(err == 1);
+                if len <= 72 - bytes_to_grind {
+                    return Signature::from(ret);
+                }
+
+                counter += 1;
+                // From 1.32 can use `to_le_bytes` instead
+                let le_counter = counter.to_le();
+                let le_counter_bytes : [u8; 4] = mem::transmute(le_counter);
+                for (i, b) in le_counter_bytes.iter().enumerate() {
+                    extra_entropy[i] = *b;
+                }
+
+                entropy_p = extra_entropy.as_ptr() as *const ffi::types::c_void;
+            }
+        }
+    }
+
     /// Generates a random keypair. Convenience function for `key::SecretKey::new`
     /// and `key::PublicKey::from_secret_key`; call those functions directly for
     /// batch key generation. Requires a signing-capable context. Requires compilation
@@ -994,6 +1036,15 @@ mod tests {
             let (sk, pk) = s.generate_keypair(&mut thread_rng());
             let sig = s.sign(&msg, &sk);
             assert_eq!(s.verify(&msg, &sig, &pk), Ok(()));
+            let low_r_sig = s.sign_low_r(&msg, &sk, 1);
+            assert_eq!(s.verify(&msg, &low_r_sig, &pk), Ok(()));
+            let compact = sig.serialize_compact();
+            if compact[0] < 0x80 {
+                assert_eq!(sig, low_r_sig);
+            } else {
+                assert_ne!(sig, low_r_sig);
+            }
+            assert!(low_r_sig.serialize_compact()[0] < 0x80);
          }
     }
 
@@ -1020,8 +1071,10 @@ mod tests {
         for key in wild_keys.iter().map(|k| SecretKey::from_slice(&k[..]).unwrap()) {
             for msg in wild_msgs.iter().map(|m| Message::from_slice(&m[..]).unwrap()) {
                 let sig = s.sign(&msg, &key);
+                let low_r_sig = s.sign_low_r(&msg, &key, 1);
                 let pk = PublicKey::from_secret_key(&s, &key);
                 assert_eq!(s.verify(&msg, &sig, &pk), Ok(()));
+                assert_eq!(s.verify(&msg, &low_r_sig, &pk), Ok(()));
             }
         }
     }
@@ -1079,6 +1132,20 @@ mod tests {
         // after normalization it should pass
         sig.normalize_s();
         assert_eq!(secp.verify(&msg, &sig, &pk), Ok(()));
+    }
+
+    #[test]
+    fn test_low_r() {
+        let secp = Secp256k1::new();
+        let msg = hex!("887d04bb1cf1b1554f1b268dfe62d13064ca67ae45348d50d1392ce2d13418ac");
+        let msg = Message::from_slice(&msg).unwrap();
+        let sk = SecretKey::from_str("57f0148f94d13095cfda539d0da0d1541304b678d8b36e243980aab4e1b7cead").unwrap();
+        let expected_sig = hex!("047dd4d049db02b430d24c41c7925b2725bcd5a85393513bdec04b4dc363632b1054d0180094122b380f4cfa391e6296244da773173e78fc745c1b9c79f7b713");
+        let expected_sig = Signature::from_compact(&expected_sig).unwrap();
+
+        let sig = secp.sign_low_r(&msg, &sk, 1);
+
+        assert_eq!(expected_sig, sig);
     }
 
     #[cfg(feature = "serde")]
