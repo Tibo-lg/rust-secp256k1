@@ -26,11 +26,6 @@ extern crate cc;
 use std::env;
 
 fn main() {
-    if cfg!(feature = "external-symbols") {
-        println!("cargo:rustc-link-lib=static=secp256k1");
-        return;
-    }
-
     // Actual build
     let mut base_config = cc::Build::new();
     base_config.include("depend/secp256k1/")
@@ -41,6 +36,7 @@ fn main() {
                .define("ENABLE_MODULE_ECDH", Some("1"))
                .define("ENABLE_MODULE_SCHNORRSIG", Some("1"))
                .define("ENABLE_MODULE_EXTRAKEYS", Some("1"))
+               .define("ENABLE_MODULE_ECDSA_ADAPTOR", Some("1"))
                .define("ECMULT_GEN_PREC_BITS", Some("4"))
                // TODO these three should be changed to use libgmp, at least until secp PR 290 is merged
                .define("USE_NUM_NONE", Some("1"))
@@ -53,21 +49,12 @@ fn main() {
         base_config.define("ECMULT_WINDOW_SIZE", Some("15")); // This is the default in the configure file (`auto`)
     }
     base_config.define("USE_EXTERNAL_DEFAULT_CALLBACKS", Some("1"));
-    #[cfg(feature = "endomorphism")]
-    base_config.define("USE_ENDOMORPHISM", Some("1"));
     #[cfg(feature = "recovery")]
     base_config.define("ENABLE_MODULE_RECOVERY", Some("1"));
 
-    if let Ok(target_endian) = env::var("CARGO_CFG_TARGET_ENDIAN") {
-        if target_endian == "big" {
-            base_config.define("WORDS_BIGENDIAN", Some("1"));
-        }
-    }
-
-    match &env::var("TARGET").unwrap() as &str {
-        "wasm32-unknown-unknown"|"wasm32-wasi" =>
-            { base_config.include("wasm-sysroot"); },
-        _ => {},
+    // Header files. WASM only.
+    if env::var("CARGO_CFG_TARGET_ARCH").unwrap() == "wasm32" {
+        base_config.include("wasm-sysroot");
     }
 
     // secp256k1

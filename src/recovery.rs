@@ -82,13 +82,13 @@ impl RecoverableSignature {
     /// Obtains a raw pointer suitable for use with FFI functions
     #[inline]
     pub fn as_ptr(&self) -> *const ffi::RecoverableSignature {
-        &self.0 as *const _
+        &self.0
     }
 
     /// Obtains a raw mutable pointer suitable for use with FFI functions
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut ffi::RecoverableSignature {
-        &mut self.0 as *mut _
+        &mut self.0
     }
 
     #[inline]
@@ -112,16 +112,16 @@ impl RecoverableSignature {
     /// for verification
     #[inline]
     pub fn to_standard(&self) -> Signature {
-        let mut ret = super_ffi::Signature::new();
         unsafe {
+            let mut ret = super_ffi::Signature::new();
             let err = ffi::secp256k1_ecdsa_recoverable_signature_convert(
                 super_ffi::secp256k1_context_no_precomp,
                 &mut ret,
                 self.as_c_ptr(),
             );
             assert!(err == 1);
+            Signature(ret)
         }
-        Signature(ret)
     }
 }
 
@@ -178,15 +178,14 @@ impl<C: Verification> Secp256k1<C> {
     pub fn recover(&self, msg: &Message, sig: &RecoverableSignature)
                    -> Result<key::PublicKey, Error> {
 
-        let mut pk = super_ffi::PublicKey::new();
-
         unsafe {
+            let mut pk = super_ffi::PublicKey::new();
             if ffi::secp256k1_ecdsa_recover(self.ctx, &mut pk,
                                             sig.as_c_ptr(), msg.as_c_ptr()) != 1 {
                 return Err(Error::InvalidSignature);
             }
-        };
-        Ok(key::PublicKey::from(pk))
+            Ok(key::PublicKey::from(pk))
+        }
     }
 }
 
@@ -199,6 +198,9 @@ mod tests {
     use super::{RecoveryId, RecoverableSignature};
     use super::super::{Secp256k1, Message};
     use super::super::Error::{IncorrectSignature, InvalidSignature};
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     #[test]
     fn capabilities() {
@@ -233,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(fuzzing))]  // fixed sig vectors can't work with fuzz-sigs
     fn sign() {
         let mut s = Secp256k1::new();
         s.randomize(&mut thread_rng());

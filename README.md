@@ -4,7 +4,7 @@
 
 ### rust-secp256k1
 
-`rust-secp256k1` is a wrapper around ![libsecp256k1](https://github.com/bitcoin-core/secp256k1),
+`rust-secp256k1` is a wrapper around [libsecp256k1](https://github.com/bitcoin-core/secp256k1),
 a C library by Pieter Wuille for producing ECDSA signatures using the SECG curve
 `secp256k1`. This library
 * exposes type-safe Rust bindings for all `libsecp256k1` functions
@@ -35,3 +35,14 @@ before_script:
     cargo generate-lockfile --verbose && cargo update -p cc --precise "1.0.41" --verbose;
     fi
 ```
+
+## Fuzzing
+
+If you want to fuzz this library, or any library which depends on it, you will
+probably want to disable the actual cryptography, since fuzzers are unable to
+forge signatures and therefore won't test many interesting codepaths. To instead
+use a trivially-broken but fuzzer-accessible signature scheme, compile with
+`--cfg=fuzzing` in your `RUSTFLAGS` variable.
+
+Note that `cargo hfuzz` sets this config flag automatically.
+

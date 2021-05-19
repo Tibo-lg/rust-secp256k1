@@ -98,19 +98,24 @@ impl Signature {
             _ => Err(InvalidSignature),
         }
     }
+
+    /// Decompose a bip340 signature into a nonce and a secret key (as byte array)
+    pub fn decompose(&self) -> Result<(PublicKey, &[u8]), Error> {
+        Ok((PublicKey::from_slice(&self.0[0..32])?, &self.0[32..64]))
+    }
 }
 
 impl KeyPair {
     /// Obtains a raw const pointer suitable for use with FFI functions
     #[inline]
     pub fn as_ptr(&self) -> *const ffi::KeyPair {
-        &self.0 as *const _
+        &self.0
     }
 
     /// Obtains a raw mutable pointer suitable for use with FFI functions
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut ffi::KeyPair {
-        &mut self.0 as *mut _
+        &mut self.0
     }
 
     /// Creates a Schnorr KeyPair directly from a secret key slice
@@ -123,8 +128,8 @@ impl KeyPair {
             return Err(InvalidPublicKey);
         }
 
-        let mut kp = ffi::KeyPair::new();
         unsafe {
+            let mut kp = ffi::KeyPair::new();
             if ffi::secp256k1_keypair_create(secp.ctx, &mut kp, data.as_c_ptr()) == 1 {
                 Ok(KeyPair(kp))
             } else {
@@ -155,13 +160,13 @@ impl KeyPair {
             ret
         };
         let mut data = random_32_bytes();
-        let mut keypair = ffi::KeyPair::new();
         unsafe {
+            let mut keypair = ffi::KeyPair::new();
             while ffi::secp256k1_keypair_create(secp.ctx, &mut keypair, data.as_c_ptr()) == 0 {
                 data = random_32_bytes();
             }
+            KeyPair(keypair)
         }
-        KeyPair(keypair)
     }
 
     /// Tweak a keypair by adding the given tweak to the secret key and updating the
@@ -169,7 +174,7 @@ impl KeyPair {
     /// Will return an error if the resulting key would be invalid or if
     /// the tweak was not a 32-byte length slice.
     #[inline]
-    pub fn add_assign<C: Verification>(
+    pub fn tweak_add_assign<C: Verification>(
         &mut self,
         secp: &Secp256k1<C>,
         tweak: &[u8],
@@ -181,15 +186,15 @@ impl KeyPair {
         unsafe {
             let err = ffi::secp256k1_keypair_xonly_tweak_add(
                 secp.ctx,
-                &mut self.0 as *mut _,
+                &mut self.0,
                 tweak.as_c_ptr(),
             );
 
-            return if err == 1 {
+            if err == 1 {
                 Ok(())
             } else {
                 Err(Error::InvalidTweak)
-            };
+            }
         }
     }
 }
@@ -198,21 +203,21 @@ impl PublicKey {
     /// Obtains a raw const pointer suitable for use with FFI functions
     #[inline]
     pub fn as_ptr(&self) -> *const ffi::XOnlyPublicKey {
-        &self.0 as *const _
+        &self.0
     }
 
     /// Obtains a raw mutable pointer suitable for use with FFI functions
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut ffi::XOnlyPublicKey {
-        &mut self.0 as *mut _
+        &mut self.0
     }
 
     /// Creates a new Schnorr public key from a Schnorr key pair
     #[inline]
     pub fn from_keypair<C: Signing>(secp: &Secp256k1<C>, keypair: &KeyPair) -> PublicKey {
-        let mut xonly_pk = ffi::XOnlyPublicKey::new();
         let mut pk_parity = 0;
         unsafe {
+            let mut xonly_pk = ffi::XOnlyPublicKey::new();
             let ret = ffi::secp256k1_keypair_xonly_pub(
                 secp.ctx,
                 &mut xonly_pk,
@@ -220,8 +225,8 @@ impl PublicKey {
                 keypair.as_ptr(),
             );
             debug_assert_eq!(ret, 1);
+            PublicKey(xonly_pk)
         }
-        PublicKey(xonly_pk)
     }
 
     /// Creates a Schnorr public key directly from a slice
@@ -231,8 +236,8 @@ impl PublicKey {
             return Err(InvalidPublicKey);
         }
 
-        let mut pk = ffi::XOnlyPublicKey::new();
         unsafe {
+            let mut pk = ffi::XOnlyPublicKey::new();
             if ffi::secp256k1_xonly_pubkey_parse(
                 ffi::secp256k1_context_no_precomp,
                 &mut pk,
@@ -264,14 +269,17 @@ impl PublicKey {
         ret
     }
 
-    /// Tweak a schnorrsig PublicKey by adding the generator multiplied with the given tweak to it.
-    /// Will return an error if the resulting key would be invalid or if
-    /// the tweak was not a 32-byte length slice.
-    pub fn add_assign<V: Verification>(
+    /// Tweak an x-only PublicKey by adding the generator multiplied with the given tweak to it.
+    ///
+    /// Returns a boolean representing the parity of the tweaked key, which can be provided to 
+    /// `tweak_add_check` which can be used to verify a tweak more efficiently than regenerating
+    /// it and checking equality. Will return an error if the resulting key would be invalid or
+    /// if the tweak was not a 32-byte length slice.
+    pub fn tweak_add_assign<V: Verification>(
         &mut self,
         secp: &Secp256k1<V>,
         tweak: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         if tweak.len() != 32 {
             return Err(Error::InvalidTweak);
         }
@@ -289,18 +297,49 @@ impl PublicKey {
                 return Err(Error::InvalidTweak);
             }
 
+            let mut parity: ::secp256k1_sys::types::c_int = 0;
             err = ffi::secp256k1_xonly_pubkey_from_pubkey(
                 secp.ctx,
-                &mut self.0 as *mut _,
-                ptr::null_mut(),
+                &mut self.0,
+                &mut parity,
                 &pubkey,
             );
 
-            return if err == 0 {
+            if err == 0 {
                 Err(Error::InvalidPublicKey)
             } else {
-                Ok(())
-            };
+                Ok(parity != 0)
+            }
+        }
+    }
+
+    /// Verify that a tweak produced by `tweak_add_assign` was computed correctly
+    ///
+    /// Should be called on the original untweaked key. Takes the tweaked key and
+    /// output parity from `tweak_add_assign` as input.
+    ///
+    /// Currently this is not much more efficient than just recomputing the tweak
+    /// and checking equality. However, in future this API will support batch
+    /// verification, which is significantly faster, so it is wise to design
+    /// protocols with this in mind.
+    pub fn tweak_add_check<V: Verification>(
+        &self,
+        secp: &Secp256k1<V>,
+        tweaked_key: &Self,
+        tweaked_parity: bool,
+        tweak: [u8; 32],
+    ) -> bool {
+        let tweaked_ser = tweaked_key.serialize();
+        unsafe {
+            let err = ffi::secp256k1_xonly_pubkey_tweak_add_check(
+                secp.ctx,
+                tweaked_ser.as_c_ptr(),
+                if tweaked_parity { 1 } else { 0 },
+                &self.0,
+                tweak.as_c_ptr(),
+            );
+
+            err == 1
         }
     }
 }
@@ -326,9 +365,8 @@ impl From<ffi::XOnlyPublicKey> for PublicKey {
 
 impl From<::key::PublicKey> for PublicKey {
     fn from(src: ::key::PublicKey) -> PublicKey {
-        let mut pk = ffi::XOnlyPublicKey::new();
-
         unsafe {
+            let mut pk = ffi::XOnlyPublicKey::new();
             assert_eq!(
                 1,
                 ffi::secp256k1_xonly_pubkey_from_pubkey(
@@ -338,9 +376,8 @@ impl From<::key::PublicKey> for PublicKey {
                     src.as_c_ptr(),
                 )
             );
+            PublicKey(pk)
         }
-
-        PublicKey(pk)
     }
 }
 
@@ -352,7 +389,24 @@ impl<C: Signing> Secp256k1<C> {
         msg: &Message,
         keypair: &KeyPair,
         nonce_data: *const ffi::types::c_void,
-    ) -> Result<Signature, Error> {
+    ) -> Signature {
+        unsafe {
+            self.schnorrsig_sign_helper_with_nonce_fn(
+                msg,
+                keypair,
+                nonce_data,
+                ffi::secp256k1_nonce_function_bip340,
+            )
+        }
+    }
+
+    fn schnorrsig_sign_helper_with_nonce_fn(
+        &self,
+        msg: &Message,
+        keypair: &KeyPair,
+        nonce_data: *const ffi::types::c_void,
+        nonce_fn: ffi::SchnorrNonceFn,
+    ) -> Signature {
         unsafe {
             let mut sig = [0u8; constants::SCHNORRSIG_SIGNATURE_SIZE];
             assert_eq!(
@@ -362,12 +416,12 @@ impl<C: Signing> Secp256k1<C> {
                     sig.as_mut_c_ptr(),
                     msg.as_c_ptr(),
                     keypair.as_ptr(),
-                    ffi::secp256k1_nonce_function_bip340,
+                    nonce_fn,
                     nonce_data
                 )
             );
 
-            Ok(Signature(sig))
+            Signature(sig)
         }
     }
 
@@ -375,7 +429,7 @@ impl<C: Signing> Secp256k1<C> {
     /// generator to generate the auxiliary random data.
     /// Requires compilation with "rand-std" feature.
     #[cfg(any(test, feature = "rand-std"))]
-    pub fn schnorrsig_sign(&self, msg: &Message, keypair: &KeyPair) -> Result<Signature, Error> {
+    pub fn schnorrsig_sign(&self, msg: &Message, keypair: &KeyPair) -> Signature {
         let mut rng = thread_rng();
         self.schnorrsig_sign_with_rng(msg, keypair, &mut rng)
     }
@@ -385,7 +439,7 @@ impl<C: Signing> Secp256k1<C> {
         &self,
         msg: &Message,
         keypair: &KeyPair,
-    ) -> Result<Signature, Error> {
+    ) -> Signature {
         self.schnorrsig_sign_helper(msg, keypair, ptr::null())
     }
 
@@ -395,7 +449,7 @@ impl<C: Signing> Secp256k1<C> {
         msg: &Message,
         keypair: &KeyPair,
         aux_rand: &[u8; 32],
-    ) -> Result<Signature, Error> {
+    ) -> Signature {
         self.schnorrsig_sign_helper(
             msg,
             keypair,
@@ -412,10 +466,51 @@ impl<C: Signing> Secp256k1<C> {
         msg: &Message,
         keypair: &KeyPair,
         rng: &mut R,
-    ) -> Result<Signature, Error> {
+    ) -> Signature {
         let mut aux = [0u8; 32];
         rng.fill_bytes(&mut aux);
         self.schnorrsig_sign_helper(msg, keypair, aux.as_c_ptr() as *const ffi::types::c_void)
+    }
+
+    /// Create a bip340 signature using the provided nonce.
+    pub fn schnorrsig_sign_with_nonce(
+        &self,
+        msg: &Message,
+        keypair: &KeyPair,
+        nonce: &[u8; 32],
+    ) -> Signature {
+        self.schnorrsig_sign_helper_with_nonce_fn(
+            msg,
+            keypair,
+            nonce.as_c_ptr() as *const ffi::types::c_void,
+            Some(ffi::constant_nonce_fn),
+        )
+    }
+
+    /// Computes a signature point based on a nonce, a message and a public key.
+    pub fn schnorrsig_compute_sig_point(
+        &self,
+        msg: &Message,
+        nonce: &PublicKey,
+        pubkey: &PublicKey,
+    ) -> Result<::key::PublicKey, Error> {
+        unsafe {
+            let mut sigpoint = ffi::PublicKey::new();
+
+            let ret = ffi::secp256k1_schnorrsig_compute_sigpoint(
+                self.ctx,
+                &mut sigpoint,
+                msg.as_c_ptr(),
+                nonce.as_c_ptr(),
+                pubkey.as_c_ptr(),
+            );
+
+            if ret == 0 {
+                return Err(Error::InvalidPublicKey);
+            }
+
+            Ok(::key::PublicKey::from(sigpoint))
+        }
     }
 
     /// Verify a Schnorr signature.
@@ -433,11 +528,11 @@ impl<C: Signing> Secp256k1<C> {
                 pubkey.as_c_ptr(),
             );
 
-            return if ret == 1 {
+            if ret == 1 {
                 Ok(())
             } else {
                 Err(Error::InvalidSignature)
-            };
+            }
         }
     }
 
@@ -467,6 +562,9 @@ mod tests {
     use rand_core::impls;
     use std::iter;
     use std::str::FromStr;
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     macro_rules! hex_32 {
         ($hex:expr) => {{
@@ -501,7 +599,6 @@ mod tests {
             let mut aux_rand = [0; 32];
             rng.fill_bytes(&mut aux_rand);
             secp.schnorrsig_sign_with_aux_rand(msg, seckey, &aux_rand)
-                .unwrap()
         })
     }
 
@@ -509,25 +606,25 @@ mod tests {
     fn test_schnorrsig_sign_with_rng_verify() {
         test_schnorrsig_sign_helper(|secp, msg, seckey, mut rng| {
             secp.schnorrsig_sign_with_rng(msg, seckey, &mut rng)
-                .unwrap()
         })
     }
 
     #[test]
     fn test_schnorrsig_sign_verify() {
         test_schnorrsig_sign_helper(|secp, msg, seckey, _| {
-            secp.schnorrsig_sign(msg, seckey).unwrap()
+            secp.schnorrsig_sign(msg, seckey)
         })
     }
 
     #[test]
     fn test_schnorrsig_sign_no_aux_rand_verify() {
         test_schnorrsig_sign_helper(|secp, msg, seckey, _| {
-            secp.schnorrsig_sign_no_aux_rand(msg, seckey).unwrap()
+            secp.schnorrsig_sign_no_aux_rand(msg, seckey)
         })
     }
 
     #[test]
+    #[cfg(not(fuzzing))]  // fixed sig vectors can't work with fuzz-sigs
     fn test_schnorrsig_sign() {
         let secp = Secp256k1::new();
 
@@ -543,13 +640,13 @@ mod tests {
         let expected_sig = Signature::from_str("6470FD1303DDA4FDA717B9837153C24A6EAB377183FC438F939E0ED2B620E9EE5077C4A8B8DCA28963D772A94F5F0DDF598E1C47C137F91933274C7C3EDADCE8").unwrap();
 
         let sig = secp
-            .schnorrsig_sign_with_aux_rand(&msg, &sk, &aux_rand)
-            .unwrap();
+            .schnorrsig_sign_with_aux_rand(&msg, &sk, &aux_rand);
 
         assert_eq!(expected_sig, sig);
     }
 
     #[test]
+    #[cfg(not(fuzzing))]  // fixed sig vectors can't work with fuzz-sigs
     fn test_schnorrsig_verify() {
         let secp = Secp256k1::new();
 
@@ -688,6 +785,7 @@ mod tests {
     }
 
     #[cfg(feature = "serde")]
+    #[cfg(not(fuzzing))]  // fixed sig vectors can't work with fuzz-sigs
     #[test]
     fn test_signature_serde() {
         use serde_test::{assert_tokens, Configure, Token};
@@ -698,8 +796,7 @@ mod tests {
         let keypair = KeyPair::from_seckey_slice(&s, &[2; 32]).unwrap();
         let aux = [3; 32];
         let sig = s
-            .schnorrsig_sign_with_aux_rand(&msg, &keypair, &aux)
-            .unwrap();
+            .schnorrsig_sign_with_aux_rand(&msg, &keypair, &aux);
         static SIG_BYTES: [u8; constants::SCHNORRSIG_SIGNATURE_SIZE] = [
             0x14, 0xd0, 0xbf, 0x1a, 0x89, 0x53, 0x50, 0x6f, 0xb4, 0x60, 0xf5, 0x8b, 0xe1, 0x41,
             0xaf, 0x76, 0x7f, 0xd1, 0x12, 0x53, 0x5f, 0xb3, 0x92, 0x2e, 0xf2, 0x17, 0x30, 0x8e,
@@ -722,9 +819,11 @@ mod tests {
             let mut tweak = [0u8; 32];
             thread_rng().fill_bytes(&mut tweak);
             let (mut kp, mut pk) = s.generate_schnorrsig_keypair(&mut thread_rng());
-            kp.add_assign(&s, &tweak).expect("Tweak error");
-            pk.add_assign(&s, &tweak).expect("Tweak error");
+            let orig_pk = pk;
+            kp.tweak_add_assign(&s, &tweak).expect("Tweak error");
+            let parity = pk.tweak_add_assign(&s, &tweak).expect("Tweak error");
             assert_eq!(PublicKey::from_keypair(&s, &kp), pk);
+            assert!(orig_pk.tweak_add_check(&s, &pk, parity, tweak));
         }
     }
 

@@ -16,8 +16,7 @@
 //! # FFI of the recovery module
 
 use ::types::*;
-#[cfg(not(feature = "fuzztarget"))]
-use ::{Context, Signature, NonceFn, PublicKey};
+use {Context, Signature, NonceFn, PublicKey};
 
 /// Library-internal representation of a Secp256k1 signature + recovery ID
 #[repr(C)]
@@ -36,23 +35,26 @@ impl Default for RecoverableSignature {
     }
 }
 
-#[cfg(not(feature = "fuzztarget"))]
 extern "C" {
-    #[cfg_attr(not(feature = "external-symbols"), link_name = "rustsecp256k1_v0_3_1_ecdsa_recoverable_signature_parse_compact")]
+    #[cfg_attr(not(rust_secp_no_symbol_renaming), link_name = "rustsecp256k1_v0_4_0-adaptor-0_ecdsa_recoverable_signature_parse_compact")]
     pub fn secp256k1_ecdsa_recoverable_signature_parse_compact(cx: *const Context, sig: *mut RecoverableSignature,
                                                                input64: *const c_uchar, recid: c_int)
                                                                -> c_int;
 
-    #[cfg_attr(not(feature = "external-symbols"), link_name = "rustsecp256k1_v0_3_1_ecdsa_recoverable_signature_serialize_compact")]
+    #[cfg_attr(not(rust_secp_no_symbol_renaming), link_name = "rustsecp256k1_v0_4_0-adaptor-0_ecdsa_recoverable_signature_serialize_compact")]
     pub fn secp256k1_ecdsa_recoverable_signature_serialize_compact(cx: *const Context, output64: *mut c_uchar,
                                                                    recid: *mut c_int, sig: *const RecoverableSignature)
                                                                    -> c_int;
 
-    #[cfg_attr(not(feature = "external-symbols"), link_name = "rustsecp256k1_v0_3_1_ecdsa_recoverable_signature_convert")]
+    #[cfg_attr(not(rust_secp_no_symbol_renaming), link_name = "rustsecp256k1_v0_4_0-adaptor-0_ecdsa_recoverable_signature_convert")]
     pub fn secp256k1_ecdsa_recoverable_signature_convert(cx: *const Context, sig: *mut Signature,
                                                          input: *const RecoverableSignature)
                                                          -> c_int;
-    #[cfg_attr(not(feature = "external-symbols"), link_name = "rustsecp256k1_v0_3_1_ecdsa_sign_recoverable")]
+}
+
+#[cfg(not(fuzzing))]
+extern "C" {
+    #[cfg_attr(not(rust_secp_no_symbol_renaming), link_name = "rustsecp256k1_v0_4_0-adaptor-0_ecdsa_sign_recoverable")]
     pub fn secp256k1_ecdsa_sign_recoverable(cx: *const Context,
                                             sig: *mut RecoverableSignature,
                                             msg32: *const c_uchar,
@@ -61,7 +63,7 @@ extern "C" {
                                             noncedata: *const c_void)
                                             -> c_int;
 
-    #[cfg_attr(not(feature = "external-symbols"), link_name = "rustsecp256k1_v0_3_1_ecdsa_recover")]
+    #[cfg_attr(not(rust_secp_no_symbol_renaming), link_name = "rustsecp256k1_v0_4_0-adaptor-0_ecdsa_recover")]
     pub fn secp256k1_ecdsa_recover(cx: *const Context,
                                    pk: *mut PublicKey,
                                    sig: *const RecoverableSignature,
@@ -70,62 +72,80 @@ extern "C" {
 }
 
 
-#[cfg(feature = "fuzztarget")]
+#[cfg(fuzzing)]
 mod fuzz_dummy {
-    extern crate std;
-    use self::std::ptr;
-    use super::RecoverableSignature;
-    use types::*;
-    use ::{Signature, Context, PublicKey, NonceFn, secp256k1_ec_seckey_verify,
-        SECP256K1_START_NONE, SECP256K1_START_VERIFY, SECP256K1_START_SIGN};
+    use super::*;
+    use std::slice;
 
-    pub unsafe fn secp256k1_ecdsa_recoverable_signature_parse_compact(_cx: *const Context, _sig: *mut RecoverableSignature,
-                                                                      _input64: *const c_uchar, _recid: c_int)
-                                                                      -> c_int {
-        unimplemented!();
-    }
+    use secp256k1_ec_pubkey_create;
+    use secp256k1_ec_pubkey_parse;
+    use secp256k1_ec_pubkey_serialize;
+    use SECP256K1_SER_COMPRESSED;
 
-    pub unsafe fn secp256k1_ecdsa_recoverable_signature_serialize_compact(_cx: *const Context, _output64: *mut c_uchar,
-                                                                          _recid: *mut c_int, _sig: *const RecoverableSignature)
-                                                                          -> c_int {
-        unimplemented!();
-    }
-
-    pub unsafe fn secp256k1_ecdsa_recoverable_signature_convert(_cx: *const Context, _sig: *mut Signature,
-                                                                _input: *const RecoverableSignature)
-                                                                -> c_int {
-        unimplemented!();
-    }
-
-    /// Sets sig to (2|3)||msg32||sk
-    pub unsafe fn secp256k1_ecdsa_sign_recoverable(cx: *const Context,
-                                                   sig: *mut RecoverableSignature,
-                                                   msg32: *const c_uchar,
-                                                   sk: *const c_uchar,
-                                                   _noncefn: NonceFn,
-                                                   _noncedata: *const c_void)
-                                                   -> c_int {
-        assert!(!cx.is_null() && (*cx).flags() & !(SECP256K1_START_NONE | SECP256K1_START_VERIFY | SECP256K1_START_SIGN) == 0);
-        assert!((*cx).flags() & SECP256K1_START_SIGN == SECP256K1_START_SIGN);
-        if secp256k1_ec_seckey_verify(cx, sk) != 1 { return 0; }
-        if *sk.offset(0) > 0x7f {
-            (*sig).0[0] = 2;
-        } else {
-            (*sig).0[0] = 3;
+    /// Sets sig to msg32||full pk
+    pub unsafe fn secp256k1_ecdsa_sign_recoverable(
+        cx: *const Context,
+        sig: *mut RecoverableSignature,
+        msg32: *const c_uchar,
+        sk: *const c_uchar,
+        _noncefn: NonceFn,
+        _noncedata: *const c_void,
+    ) -> c_int {
+        // Check context is built for signing (and compute pk)
+        let mut new_pk = PublicKey::new();
+        if secp256k1_ec_pubkey_create(cx, &mut new_pk, sk) != 1 {
+            return 0;
         }
-        ptr::copy(msg32, (*sig).0[1..33].as_mut_ptr(), 32);
-        ptr::copy(sk, (*sig).0[33..65].as_mut_ptr(), 32);
+        // Sign
+        let sig_sl = slice::from_raw_parts_mut(sig as *mut u8, 65);
+        let msg_sl = slice::from_raw_parts(msg32 as *const u8, 32);
+        sig_sl[..32].copy_from_slice(msg_sl);
+        let mut out_len: size_t = 33;
+        secp256k1_ec_pubkey_serialize(cx, sig_sl[32..].as_mut_ptr(), &mut out_len, &new_pk, SECP256K1_SER_COMPRESSED);
+        // Encode the parity of the pubkey in the final byte as 0/1,
+        // which is the same encoding (though the parity is computed
+        // differently) as real recoverable signatures.
+        sig_sl.swap(32, 64);
+        sig_sl[64] -= 2;
         1
     }
 
-    pub unsafe fn secp256k1_ecdsa_recover(_cx: *const Context,
-                                          _pk: *mut PublicKey,
-                                          _sig: *const RecoverableSignature,
-                                          _msg32: *const c_uchar)
-                                          -> c_int {
-        unimplemented!();
+    pub unsafe fn secp256k1_ecdsa_recover(
+        cx: *const Context,
+        pk: *mut PublicKey,
+        sig: *const RecoverableSignature,
+        msg32: *const c_uchar
+    ) -> c_int {
+        let sig_sl = slice::from_raw_parts(sig as *const u8, 65);
+        let msg_sl = slice::from_raw_parts(msg32 as *const u8, 32);
+
+        if sig_sl[64] >= 4 {
+            return 0;
+        }
+        // Pull the original pk out of the siganture
+        let mut pk_ser = [0; 33];
+        pk_ser.copy_from_slice(&sig_sl[32..]);
+        pk_ser.swap(0, 32);
+        pk_ser[0] += 2;
+        // Check that it parses (in a real sig, this would be the R value,
+        // so it is actually required to be a valid point)
+        if secp256k1_ec_pubkey_parse(cx, pk, pk_ser.as_ptr(), 33) == 0 {
+            return 0;
+        }
+        // Munge it up so that a different message will give a different pk
+        for i in 0..32 {
+            pk_ser[i + 1] ^= sig_sl[i] ^ msg_sl[i];
+        }
+        // If any munging happened, this will fail parsing half the time, so
+        // tweak-and-loop until we find a key that works.
+        let mut idx = 0;
+        while secp256k1_ec_pubkey_parse(cx, pk, pk_ser.as_ptr(), 33) == 0 {
+            pk_ser[1 + idx / 8] ^= 1 << (idx % 8);
+            idx += 1;
+        }
+        1
     }
 }
-#[cfg(feature = "fuzztarget")]
+#[cfg(fuzzing)]
 pub use self::fuzz_dummy::*;
 

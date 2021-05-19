@@ -40,6 +40,12 @@ pub const SCHNORRSIG_SIGNATURE_SIZE: usize = 64;
 /// Size of a Schnorr public key
 pub const SCHNORRSIG_PUBLIC_KEY_SIZE: usize = 32;
 
+/// Size of an adaptor signature
+pub const ADAPTOR_SIGNATURE_SIZE: usize = 65;
+
+/// Size of an adaptor proof
+pub const ADAPTOR_PROOF_SIZE: usize = 97;
+
 /// Size of a key pair
 pub const KEY_PAIR_SIZE: usize = 96;
 

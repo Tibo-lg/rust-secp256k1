@@ -61,6 +61,11 @@ impl SharedSecret {
         self.len
     }
 
+    /// True if the underlying data buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     /// Set the length of the object.
     pub(crate) fn set_len(&mut self, len: usize) {
         debug_assert!(len <= self.data.len());
@@ -146,7 +151,7 @@ impl SharedSecret {
                 xy.as_mut_ptr(),
                 point.as_ptr(),
                 scalar.as_ptr(),
-                c_callback,
+                Some(c_callback),
                 ptr::null_mut(),
             )
         };
@@ -167,6 +172,9 @@ mod tests {
     use rand::thread_rng;
     use super::SharedSecret;
     use super::super::Secp256k1;
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     #[test]
     fn ecdh() {

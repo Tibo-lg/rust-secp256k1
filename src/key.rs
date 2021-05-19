@@ -64,7 +64,8 @@ pub const ONE_KEY: SecretKey = SecretKey([0, 0, 0, 0, 0, 0, 0, 0,
                                           0, 0, 0, 0, 0, 0, 0, 1]);
 
 /// A Secp256k1 public key, used for verification of signatures
-#[derive(Copy, Clone, PartialEq, Eq, Debug, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
+#[repr(transparent)]
 pub struct PublicKey(ffi::PublicKey);
 
 impl fmt::LowerHex for PublicKey {
@@ -219,13 +220,13 @@ impl PublicKey {
     /// Obtains a raw const pointer suitable for use with FFI functions
     #[inline]
     pub fn as_ptr(&self) -> *const ffi::PublicKey {
-        &self.0 as *const _
+        &self.0
     }
 
     /// Obtains a raw mutable pointer suitable for use with FFI functions
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut ffi::PublicKey {
-        &mut self.0 as *mut _
+        &mut self.0
     }
 
     /// Creates a new public key from a secret key.
@@ -233,14 +234,14 @@ impl PublicKey {
     pub fn from_secret_key<C: Signing>(secp: &Secp256k1<C>,
                            sk: &SecretKey)
                            -> PublicKey {
-        let mut pk = ffi::PublicKey::new();
         unsafe {
+            let mut pk = ffi::PublicKey::new();
             // We can assume the return value because it's not possible to construct
             // an invalid `SecretKey` without transmute trickery or something
             let res = ffi::secp256k1_ec_pubkey_create(secp.ctx, &mut pk, sk.as_c_ptr());
             debug_assert_eq!(res, 1);
+            PublicKey(pk)
         }
-        PublicKey(pk)
     }
 
     /// Creates a public key directly from a slice
@@ -248,8 +249,8 @@ impl PublicKey {
     pub fn from_slice(data: &[u8]) -> Result<PublicKey, Error> {
         if data.is_empty() {return Err(Error::InvalidPublicKey);}
 
-        let mut pk = ffi::PublicKey::new();
         unsafe {
+            let mut pk = ffi::PublicKey::new();
             if ffi::secp256k1_ec_pubkey_parse(
                 ffi::secp256k1_context_no_precomp,
                 &mut pk,
@@ -313,7 +314,7 @@ impl PublicKey {
         secp: &Secp256k1<C>
     ) {
         unsafe {
-            let res = ffi::secp256k1_ec_pubkey_negate(secp.ctx, &mut self.0 as *mut _);
+            let res = ffi::secp256k1_ec_pubkey_negate(secp.ctx, &mut self.0);
             debug_assert_eq!(res, 1);
         }
     }
@@ -331,8 +332,7 @@ impl PublicKey {
             return Err(Error::InvalidTweak);
         }
         unsafe {
-            if ffi::secp256k1_ec_pubkey_tweak_add(secp.ctx, &mut self.0 as *mut _,
-                                                  other.as_c_ptr()) == 1 {
+            if ffi::secp256k1_ec_pubkey_tweak_add(secp.ctx, &mut self.0, other.as_c_ptr()) == 1 {
                 Ok(())
             } else {
                 Err(Error::InvalidTweak)
@@ -353,8 +353,7 @@ impl PublicKey {
             return Err(Error::InvalidTweak);
         }
         unsafe {
-            if ffi::secp256k1_ec_pubkey_tweak_mul(secp.ctx, &mut self.0 as *mut _,
-                                                  other.as_c_ptr()) == 1 {
+            if ffi::secp256k1_ec_pubkey_tweak_mul(secp.ctx, &mut self.0, other.as_c_ptr()) == 1 {
                 Ok(())
             } else {
                 Err(Error::InvalidTweak)
@@ -366,14 +365,26 @@ impl PublicKey {
     /// the result would be the point at infinity, i.e. we are adding this point
     /// to its own negation
     pub fn combine(&self, other: &PublicKey) -> Result<PublicKey, Error> {
+        PublicKey::combine_keys(&[self, other])
+    }
+
+    /// Adds the keys in the provided slice together, returning the sum. Returns
+    /// an error if the result would be the point at infinity, i.e. we are adding
+    /// a point to its own negation
+    pub fn combine_keys(keys: &[&PublicKey]) -> Result<PublicKey, Error> {
+        use core::mem::transmute;
+        use core::i32::MAX;
+
+        debug_assert!(keys.len() < MAX as usize);
         unsafe {
             let mut ret = ffi::PublicKey::new();
-            let ptrs = [self.as_c_ptr(), other.as_c_ptr()];
+            let ptrs : &[*const ffi::PublicKey] =
+                transmute::<&[&PublicKey], &[*const ffi::PublicKey]>(keys);
             if ffi::secp256k1_ec_pubkey_combine(
                 ffi::secp256k1_context_no_precomp,
                 &mut ret,
                 ptrs.as_c_ptr(),
-                2
+                keys.len() as i32
             ) == 1
             {
                 Ok(PublicKey(ret))
@@ -406,6 +417,18 @@ impl From<ffi::PublicKey> for PublicKey {
 
 serde_impl_from_slice!(PublicKey);
 
+impl PartialOrd for PublicKey {
+    fn partial_cmp(&self, other: &PublicKey) -> Option<::core::cmp::Ordering> {
+        self.serialize().partial_cmp(&other.serialize())
+    }
+}
+
+impl Ord for PublicKey {
+    fn cmp(&self, other: &PublicKey) -> ::core::cmp::Ordering {
+        self.serialize().cmp(&other.serialize())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use Secp256k1;
@@ -418,6 +441,9 @@ mod test {
     use rand_core::impls;
     use std::iter;
     use std::str::FromStr;
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as test;
 
     macro_rules! hex {
         ($hex:expr) => ({
@@ -502,7 +528,8 @@ mod test {
                 self.0 -= 1;
             }
             fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
-                Ok(self.fill_bytes(dest))
+                self.fill_bytes(dest);
+                Ok(())
             }
         }
 
@@ -751,13 +778,13 @@ mod test {
         let s = Secp256k1::new();
         let mut set = HashSet::new();
         const COUNT : usize = 1024;
-        let count = (0..COUNT).map(|_| {
+        for _ in 0..COUNT {
             let (_, pk) = s.generate_keypair(&mut thread_rng());
             let hash = hash(&pk);
             assert!(!set.contains(&hash));
             set.insert(hash);
-        }).count();
-        assert_eq!(count, COUNT);
+        };
+        assert_eq!(set.len(), COUNT);
     }
 
     #[test]
@@ -781,11 +808,34 @@ mod test {
     }
 
     #[test]
+    fn pubkey_combine_keys() {
+        let compressed1 = PublicKey::from_slice(
+            &hex!("0241cc121c419921942add6db6482fb36243faf83317c866d2a28d8c6d7089f7ba"),
+        ).unwrap();
+        let compressed2 = PublicKey::from_slice(
+            &hex!("02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443"),
+        ).unwrap();
+        let compressed3 = PublicKey::from_slice(
+            &hex!("03e74897d8644eb3e5b391ca2ab257aec2080f4d1a95cad57e454e47f021168eb0")
+        ).unwrap();
+        let exp_sum = PublicKey::from_slice(
+            &hex!("0252d73a47f66cf341e5651542f0348f452b7c793af62a6d8bff75ade703a451ad"),
+        ).unwrap();
+
+        let sum1 = PublicKey::combine_keys(&[&compressed1, &compressed2, &compressed3]);
+        assert!(sum1.is_ok());
+        let sum2 = PublicKey::combine_keys(&[&compressed1, &compressed2, &compressed3]);
+        assert!(sum2.is_ok());
+        assert_eq!(sum1, sum2);
+        assert_eq!(sum1.unwrap(), exp_sum);
+    }
+
+    #[test]
     fn pubkey_equal() {
         let pk1 = PublicKey::from_slice(
             &hex!("0241cc121c419921942add6db6482fb36243faf83317c866d2a28d8c6d7089f7ba"),
         ).unwrap();
-        let pk2 = pk1.clone();
+        let pk2 = pk1;
         let pk3 = PublicKey::from_slice(
             &hex!("02e6642fd69bd211f93f7f1f36ca51a26a5290eb2dd1b0d8279a87bb0d480c8443"),
         ).unwrap();
@@ -796,10 +846,10 @@ mod test {
         assert!(!(pk2 < pk1));
         assert!(!(pk1 < pk2));
 
-        assert!(pk3 < pk1);
-        assert!(pk1 > pk3);
-        assert!(pk3 <= pk1);
-        assert!(pk1 >= pk3);
+        assert!(pk3 > pk1);
+        assert!(pk1 < pk3);
+        assert!(pk3 >= pk1);
+        assert!(pk1 <= pk3);
     }
 
     #[cfg(feature = "serde")]

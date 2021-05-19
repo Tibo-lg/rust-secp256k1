@@ -2,7 +2,7 @@ ACLOCAL_AMFLAGS = -I build-aux/m4
 
 lib_LTLIBRARIES = libsecp256k1.la
 include_HEADERS = include/secp256k1.h
-include_HEADERS += include/rustsecp256k1_v0_3_1_preallocated.h
+include_HEADERS += include/rustsecp256k1_v0_4_0_adaptor_0_preallocated.h
 noinst_HEADERS =
 noinst_HEADERS += src/scalar.h
 noinst_HEADERS += src/scalar_4x64.h
@@ -14,8 +14,6 @@ noinst_HEADERS += src/scalar_8x32_impl.h
 noinst_HEADERS += src/scalar_low_impl.h
 noinst_HEADERS += src/group.h
 noinst_HEADERS += src/group_impl.h
-noinst_HEADERS += src/num_gmp.h
-noinst_HEADERS += src/num_gmp_impl.h
 noinst_HEADERS += src/ecdsa.h
 noinst_HEADERS += src/ecdsa_impl.h
 noinst_HEADERS += src/eckey.h
@@ -26,14 +24,16 @@ noinst_HEADERS += src/ecmult_const.h
 noinst_HEADERS += src/ecmult_const_impl.h
 noinst_HEADERS += src/ecmult_gen.h
 noinst_HEADERS += src/ecmult_gen_impl.h
-noinst_HEADERS += src/num.h
-noinst_HEADERS += src/num_impl.h
 noinst_HEADERS += src/field_10x26.h
 noinst_HEADERS += src/field_10x26_impl.h
 noinst_HEADERS += src/field_5x52.h
 noinst_HEADERS += src/field_5x52_impl.h
 noinst_HEADERS += src/field_5x52_int128_impl.h
 noinst_HEADERS += src/field_5x52_asm_impl.h
+noinst_HEADERS += src/modinv32.h
+noinst_HEADERS += src/modinv32_impl.h
+noinst_HEADERS += src/modinv64.h
+noinst_HEADERS += src/modinv64_impl.h
 noinst_HEADERS += src/assumptions.h
 noinst_HEADERS += src/util.h
 noinst_HEADERS += src/scratch.h
@@ -52,7 +52,7 @@ noinst_HEADERS += contrib/lax_der_privatekey_parsing.h
 noinst_HEADERS += contrib/lax_der_privatekey_parsing.c
 
 if USE_EXTERNAL_ASM
-COMMON_LIB = librustsecp256k1_v0_3_1_common.la
+COMMON_LIB = librustsecp256k1_v0_4_0_adaptor_0_common.la
 noinst_LTLIBRARIES = $(COMMON_LIB)
 else
 COMMON_LIB =
@@ -63,16 +63,16 @@ pkgconfig_DATA = libsecp256k1.pc
 
 if USE_EXTERNAL_ASM
 if USE_ASM_ARM
-librustsecp256k1_v0_3_1_common_la_SOURCES = src/asm/field_10x26_arm.s
+librustsecp256k1_v0_4_0_adaptor_0_common_la_SOURCES = src/asm/field_10x26_arm.s
 endif
 endif
 
-librustsecp256k1_v0_3_1_la_SOURCES = src/secp256k1.c
-librustsecp256k1_v0_3_1_la_CPPFLAGS = -DSECP256K1_BUILD -I$(top_srcdir)/include -I$(top_srcdir)/src $(SECP_INCLUDES)
-librustsecp256k1_v0_3_1_la_LIBADD = $(SECP_LIBS) $(COMMON_LIB)
+librustsecp256k1_v0_4_0_adaptor_0_la_SOURCES = src/secp256k1.c
+librustsecp256k1_v0_4_0_adaptor_0_la_CPPFLAGS = -DSECP256K1_BUILD -I$(top_srcdir)/include -I$(top_srcdir)/src $(SECP_INCLUDES)
+librustsecp256k1_v0_4_0_adaptor_0_la_LIBADD = $(SECP_LIBS) $(COMMON_LIB)
 
 if VALGRIND_ENABLED
-librustsecp256k1_v0_3_1_la_CPPFLAGS += -DVALGRIND
+librustsecp256k1_v0_4_0_adaptor_0_la_CPPFLAGS += -DVALGRIND
 endif
 
 noinst_PROGRAMS =
@@ -134,7 +134,7 @@ gen_%.o: src/gen_%.c src/libsecp256k1-config.h
 $(gen_context_BIN): $(gen_context_OBJECTS)
 	$(CC_FOR_BUILD) $(CFLAGS_FOR_BUILD) $(LDFLAGS_FOR_BUILD) $^ -o $@
 
-$(librustsecp256k1_v0_3_1_la_OBJECTS): src/ecmult_static_context.h
+$(librustsecp256k1_v0_4_0_adaptor_0_la_OBJECTS): src/ecmult_static_context.h
 $(tests_OBJECTS): src/ecmult_static_context.h
 $(bench_internal_OBJECTS): src/ecmult_static_context.h
 $(bench_ecmult_OBJECTS): src/ecmult_static_context.h
@@ -162,3 +162,8 @@ endif
 if ENABLE_MODULE_SCHNORRSIG
 include src/modules/schnorrsig/Makefile.am.include
 endif
+
+if ENABLE_MODULE_ECDSA_ADAPTOR
+include src/modules/ecdsa_adaptor/Makefile.am.include
+endif
+
